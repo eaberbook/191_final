@@ -1,0 +1,245 @@
+library(matrixStats)
+library(dplyr)
+library(timeSeries)
+library(StatMatch)
+library(FNN)
+
+volatility <- function(mat){
+  
+  library("matrixStats")
+  library("dplyr")
+  
+  month = mat$month[1]
+  monthly_values = data.frame()
+  sd_matrix = data.frame()
+  dates <- c()
+  
+  for( y in 2010:2015)
+  {
+    for(m in 1:12)
+    {
+      
+      monthly_values = dplyr::filter(mat, month == m, year == y)
+      if(nrow(monthly_values) != 0)
+      {
+        monthly_values = as.matrix(monthly_values[,4:dim(mat)[2]])
+        sd_matrix = rbind(sd_matrix, colSds(monthly_values))
+        date = paste(m,y,sep="/")
+        dates <- append(dates, date)
+      }
+    }
+  }
+  return (sd_matrix);
+}
+
+currencies <- read.csv(file = "currencies.csv", header = TRUE)
+commodities <- read.csv(file = "commodities.csv", header = TRUE)
+complete <- merge(currencies, commodities, by='Date', sort = FALSE)
+complete <- complete[complete.cases(complete),]
+
+currencies <- complete[,2:ncol(currencies)]
+commodities <- complete[,(ncol(currencies)+3):ncol(complete)]
+
+
+clusters <- kmeans(t(currencies), 7, nstart = 10)
+summary(clusters) 
+plot(1:9,clusters)
+length(clusters)
+
+complete_without_dates <- complete[,2:ncol(complete)]
+datetxt <- complete$Date
+datetxt <- as.Date(datetxt,"%m/%d/%Y")
+datetxt <- as.Date(datetxt)
+df <- data.frame(day = as.numeric(format(datetxt, format = "%d")) ,month = as.numeric(format(datetxt, format = "%m")),year = as.numeric(format(datetxt, format = "%Y"))) 
+complete_with_dates <- cbind(df,complete_without_dates)
+
+
+standard_devs <- volatility(complete_with_dates)
+tickers <- names(complete)[2:ncol(complete)]
+colnames(standard_devs) <- tickers
+
+currencies <- standard_devs[,1:ncol(currencies)]
+
+d <- dist(t(currencies), method = "euclidean")
+hclusters <- hclust(d, method = "complete")
+plot(hclusters)
+
+d<-dist(t(standard_devs), method = "euclidean")
+hclusters <- hclust(d, method = "complete")
+plot(hclusters)
+
+
+#In Sample:
+
+# Linear Regression
+nrDays<-nrow(complete)
+table<-NULL
+windowdata<- complete[,-1] #getting rid of date column 
+for(j in 1:38){
+  PNL_vec <-data.frame()
+  response <- windowdata[,j]
+  predict <- windowdata[]
+  for(i in 101:nrDays){
+    wpredict <- predict[(i-100):(i-1),]
+    wresponse <- response[(i-99):i]
+    
+    wpredict<- as.matrix(wpredict)
+    model <- lm(wresponse ~ wpredict)
+    v <- model$coefficients
+    
+    
+    est <- wpredict[100,] %*% v[2:39] + v[1]
+    
+    
+    PNL <- ifelse(est > 0 , wresponse[100], -1*wresponse[100])
+    PNL_vec <- rbind(PNL_vec,PNL)
+  }
+  PNL_vec <- PNL_vec[,1]
+  sum <- cumsum(PNL_vec)
+  sharpe <- mean(PNL_vec)/sd(PNL_vec)*sqrt(252)
+  meanPNL <- mean(PNL_vec)
+  annret <- mean(PNL_vec)*252
+  totalreturn <- sum(PNL_vec)
+  table <- rbind(table, data.frame( sharpe, meanPNL, annret, totalreturn))
+}
+
+
+# In-Sample PCA
+sPCA <- run_PCA(windowdata,5)
+sPCApredict <- sPCA[1:(nrDays-1),]
+sPCArespond <-sPCA[2:nrDays,]
+sPCAtable <- NULL
+for(i in 1:5){
+  predict<-sPCApredict
+  respond<-sPCArespond[,i]
+  
+  model<-lm(respond~predict)
+  v <- model$coefficients
+  est <- predict %*% v[2:6] + v[1]
+  pnl <- ifelse(est > 0, respond, respond*-1)
+  
+  csum<-cumsum(pnl)
+  sharpe<-mean(pnl)/sd(pnl)*sqrt(252)
+  meanpnl<-mean(pnl)
+  annret <- mean(pnl)*252
+  totalreturn <- sum(pnl)
+  sPCAtable <- rbind(sPCAtable, data.frame(sharpe,meanpnl,annret,totalreturn))
+}
+
+# Out of Sample PCA:
+nrLags = 1
+lookback = 100; # sliding window size in days
+nrTickers <- ncol(windowdata)
+
+knn_PNL = array(0, dim = c(nrDays,nrTickers));
+lm_PNL = array(0, dim = c(nrDays,nrTickers));
+for(i in (lookback + nrLags) : (nrDays - nrLags)) {
+  xtrain <- windowdata[ (i-lookback) : (i-1), ];
+  xtest <- windowdata[ i, , drop=FALSE]
+  
+  both <- rbind(xtrain , xtest)
+  
+  ans <-run_PCA(both, 10) # perform PCA on the 101xnrFeatures matrix
+
+  xtrain<-ans[1:lookback,]
+  xtest<-ans[ (lookback + 1), ]
+  
+  for(j in 1:nrTickers){
+    y_train = windowdata [ (i-lookback+1) : i,j]
+    y_test = windowdata [i+1,j ]
+    
+    # k Nearest Neighbor section and entry into matrix
+    
+    y_hat = knn.reg(train = xtrain, test = xtest, y = y_train, k = 10);
+    y_hat = y_hat$pred;
+    
+    knn_PNL[i,j] = sign(y_hat) * y_test;
+    
+    # Linear Regression section and entry into matrix
+    
+    model<-lm(y_train~xtrain)
+    v <- model$coefficients
+    est <- xtest %*% v[2:11] + v[1]
+    
+    lm_PNL[i,j] = sign(est) * est;
+    
+  }
+
+}
+
+
+#Get rid of zeroes at beginning of matrix
+knn_PNL = knn_PNL[(lookback+1):(nrDays-1),]
+lm_PNL = lm_PNL[(lookback+1):(nrDays-1),]
+
+Sharpes = round( apply(knn_PNL, 2 ,compute_Sharpe_Ratio ), 2)
+dailyPNL = apply(knn_PNL, 2, mean, na.rm = TRUE);
+monthlyPNL = dailyPNL * 252;
+totalPNL = apply(knn_PNL, 2, sum, na.rm = TRUE);
+
+knnSTATS = cbind(dailyPNL,monthlyPNL,totalPNL,Sharpes)
+
+# plot_cumsum(knnSTATS)
+
+Sharpes = round( apply(lm_PNL, 2 ,compute_Sharpe_Ratio ), 2)
+dailyPNL = apply(lm_PNL, 2, mean, na.rm = TRUE);
+monthlyPNL = dailyPNL * 252;
+totalPNL = apply(lm_PNL, 2, sum, na.rm = TRUE);
+
+lmSTATS = cbind(dailyPNL,monthlyPNL,totalPNL,Sharpes)
+
+# plot_cumsum(lmSTATS)
+
+
+
+##################################
+
+## FUNCTION TO COMPUTE PCA
+
+##################################
+
+run_PCA = function(X_train, nrFactors){
+  
+myPCA = prcomp(X_train, center = TRUE, scale. = TRUE, retx = TRUE);
+pcaRot = myPCA$rotation
+EIGS_PCA = myPCA$x
+
+q = myPCA$sdev
+
+FACTORS = EIGS_PCA[, 1:nrFactors];
+
+  
+return(FACTORS);
+}
+
+
+compute_Sharpe_Ratio = function(x){
+  sh = mean(x, na.rm=TRUE) / sd(x, na.rm=TRUE) * sqrt(252);  return(sh);
+}
+
+
+#########################
+
+## plot_CUMSUM function
+
+#########################
+
+plot_cumsum = function(CUM_SUM_MTX){
+  # INPUT: CUM_SUM_MTX, a matrix of size nrDays  x nrTickers 
+  #   which plots the time series (one from each column) on the same plot.
+  
+  nrTickers = dim(CUM_SUM_MTX)[2];
+  nrDays = dim(CUM_SUM_MTX)[1];
+ myColors = c('red','blue', 'green','black','magenta', 'cyan','yellow')
+  
+  # pdf(file = 'cumulative_pnl_across_time.pdf', height = 12,  width = 8);
+  # plot( CUM_SUM_MTX[ ,1], col = myColors[1], type ='l', pch=3, ylim = c(-2,6), lwd=2);
+  plot (c(0, nrDays),c(20000,100000),type='n', xlab ='days', ylab = 'pnl') # sets the x and y axes scales
+  for ( i in 1 : nrTickers){
+    # plots the time series on the same graph
+    lines( 1: nrDays, CUM_SUM_MTX[ ,i], col = myColors[i], lwd=2);  # , ylim = c(-1,1)
+  }
+  
+  legend( 'topleft', legend = colnames(CUM_SUM_MTX), lty = 1, lwd = 2, col = myColors);  # , fill=TRUE
+  
+}
