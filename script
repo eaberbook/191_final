@@ -3,34 +3,9 @@ library(dplyr)
 library(timeSeries)
 library(StatMatch)
 library(FNN)
+library(diffusionMap)
+library(rARPACK)
 
-volatility <- function(mat){
-  
-  library("matrixStats")
-  library("dplyr")
-  
-  month = mat$month[1]
-  monthly_values = data.frame()
-  sd_matrix = data.frame()
-  dates <- c()
-  
-  for( y in 2010:2015)
-  {
-    for(m in 1:12)
-    {
-      
-      monthly_values = dplyr::filter(mat, month == m, year == y)
-      if(nrow(monthly_values) != 0)
-      {
-        monthly_values = as.matrix(monthly_values[,4:dim(mat)[2]])
-        sd_matrix = rbind(sd_matrix, colSds(monthly_values))
-        date = paste(m,y,sep="/")
-        dates <- append(dates, date)
-      }
-    }
-  }
-  return (sd_matrix);
-}
 
 currencies <- read.csv(file = "currencies.csv", header = TRUE)
 commodities <- read.csv(file = "commodities.csv", header = TRUE)
@@ -75,28 +50,29 @@ plot(hclusters)
 nrDays<-nrow(complete)
 table<-NULL
 windowdata<- complete[,-1] #getting rid of date column 
+
+
 for(j in 1:38){
   PNL_vec <-data.frame()
   response <- windowdata[,j]
   predict <- windowdata[]
   for(i in 101:nrDays){
     wpredict <- predict[(i-100):(i-1),]
-    wresponse <- response[(i-99):i]
+    wresponse <- response[(i-100):i]
     
     wpredict<- as.matrix(wpredict)
-    model <- lm(wresponse ~ wpredict)
+    model <- lm(wresponse[1:100] ~ wpredict)
     v <- model$coefficients
-    
     
     est <- wpredict[100,] %*% v[2:39] + v[1]
     
     
-    PNL <- ifelse(est > 0 , wresponse[100], -1*wresponse[100])
+    PNL <- ifelse(est > 0 , wresponse[101], -1*wresponse[101])
     PNL_vec <- rbind(PNL_vec,PNL)
   }
   PNL_vec <- PNL_vec[,1]
   sum <- cumsum(PNL_vec)
-  sharpe <- mean(PNL_vec)/sd(PNL_vec)*sqrt(252)
+  sharpe <- mean(PNL_vec)/sd(PNL_vec)
   meanPNL <- mean(PNL_vec)
   annret <- mean(PNL_vec)*252
   totalreturn <- sum(PNL_vec)
@@ -105,6 +81,7 @@ for(j in 1:38){
 
 
 # In-Sample PCA
+
 sPCA <- run_PCA(windowdata,5)
 sPCApredict <- sPCA[1:(nrDays-1),]
 sPCArespond <-sPCA[2:nrDays,]
@@ -167,6 +144,27 @@ for(i in (lookback + nrLags) : (nrDays - nrLags)) {
 
 }
 
+# Diffusion Map
+
+DIST = dist(t(windowdata), method = "euclidean", diag = FALSE, upper = TRUE, p =2)
+DIST = as.matrix(DIST)
+hist(c(DIST),100)
+
+eps = 0.1
+W = exp(-(DIST^2)/(eps^2))
+W = W + 0.000001 # numerical accuracy
+
+G = W
+degsG = rowSums(G)
+n = dim(G)[1]
+Dinv = diag(degsG^(-1))
+L = Dinv %*% G
+
+ansEigs = eigs(L, k= 10, which = 'LR')
+eigVectors = ansEigs[['vectors']]
+eigValues = ansEigs[['values']]
+
+
 
 #Get rid of zeroes at beginning of matrix
 knn_PNL = knn_PNL[(lookback+1):(nrDays-1),]
@@ -214,7 +212,8 @@ return(FACTORS);
 
 
 compute_Sharpe_Ratio = function(x){
-  sh = mean(x, na.rm=TRUE) / sd(x, na.rm=TRUE) * sqrt(252);  return(sh);
+  sh = mean(x, na.rm=TRUE) / sd(x, na.rm=TRUE) * sqrt(252);  
+  return(sh);
 }
 
 
