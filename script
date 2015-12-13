@@ -27,7 +27,7 @@ nrDays<-nrow(complete)
 table<-NULL
 windowdata<- complete[,-1] #getting rid of date column 
 complete_dropdates<-windowdata
-estimated_values <- data.frame(matrix(nrow = (nrDays-100), ncol = 0))
+estimated_values <- data.frame(matrix(nrow = (nrDays-101), ncol = 0))
 
 ###########
 
@@ -35,11 +35,11 @@ estimated_values <- data.frame(matrix(nrow = (nrDays-100), ncol = 0))
 
 ###########
 
-for(j in 1:38){
+for(j in 1:1){
   
   estimate <- data.frame()
 
-  for(d in 101:nrDays){
+  for(d in 101:(nrDays-1)){
     
     response <- complete_dropdates[,j]
     predict <- complete_dropdates[,]
@@ -57,7 +57,7 @@ for(j in 1:38){
     model.data <- data.frame(response,predict)
     model <- lm(response~as.matrix(model.elements))
     v <- model$coefficients
-    est <- as.matrix(model.elements[100,]) %*% v[2:11] + v[1]
+    est <- as.matrix(complete_dropdates[d,pos]) %*% v[2:11] + v[1]
     estimate <- rbind(estimate,est)
     
   }
@@ -66,7 +66,7 @@ estimated_values<-data.frame(estimated_values,estimate)
   
 }
 estimated_values <- as.matrix(estimated_values)
-B
+
 #####
 
 ## LINEAR REGRESSION BY STEPWISE METHOD
@@ -179,7 +179,7 @@ plot_cumsum(USDmatrix)
 knnError <- realUSD - knnUSD
 lmError <- realUSD - lmUSD
 regError <- realUSD - regUSD
-stepError <- realUSD - regUSD
+stepError <- realUSD - stepUSD
 
 par(mfrow=c(2,1))
 hist(knnError); hist(lmError); hist(regError); hist(stepError)
